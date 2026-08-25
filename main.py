@@ -140,8 +140,42 @@ def validation_exception_handler(request, exc: RequestValidationError):
     return JSONResponse(status_code=400, content={"error": message})
 
 
+def row_to_task(row: sqlite3.Row) -> dict:
+    """Turn one database row into the exact JSON shape the API promises.
+
+    SQLite has no real boolean type - done comes back as 0 or 1 - so the cast
+    to True/False happens here, in one place, instead of in every route.
+    """
+    return {"id": row["id"], "title": row["title"], "done": bool(row["done"])}
+
+
+def select_tasks() -> list[dict]:
+    """Every task, oldest first. ORDER BY id makes that ordering a promise
+    rather than something SQLite happens to do today."""
+    with db_lock:
+        rows = db.execute("SELECT id, title, done FROM tasks ORDER BY id").fetchall()
+    return [row_to_task(row) for row in rows]
+
+
+def select_task(task_id: int) -> dict | None:
+    """One task by id, or None if the database has no such row.
+
+    The id goes in as a ? parameter, never string-formatted into the SQL -
+    that is what stops a crafted id from being executed as SQL.
+    """
+    with db_lock:
+        row = db.execute(
+            "SELECT id, title, done FROM tasks WHERE id = ?", (task_id,)
+        ).fetchone()
+    return row_to_task(row) if row else None
+
+
 def find_task(task_id: int):
-    """Return the task dict with this id, or None."""
+    """Return the in-memory task dict with this id, or None.
+
+    Only the writes still use this. They move onto SQL in stages 2 and 3, and
+    this function and the list behind it disappear with them.
+    """
     for task in tasks:
         if task["id"] == task_id:
             return task
@@ -191,10 +225,11 @@ def health():
     response_model=list[Task],
     tags=["tasks"],
     summary="List every task",
-    description="Returns all tasks, oldest first. The list is never paginated.",
+    description="Returns all tasks, oldest first, straight from SQLite. The "
+    "list is never paginated.",
 )
 def list_tasks():
-    return tasks
+    return select_tasks()
 
 
 @app.get(
@@ -207,7 +242,7 @@ def list_tasks():
     "integer id is a 404.",
 )
 def get_task(task_id: int):
-    task = find_task(task_id)
+    task = select_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
     return task
