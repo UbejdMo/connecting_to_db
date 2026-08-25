@@ -194,11 +194,6 @@ def clean_title(payload: dict) -> str:
     return title.strip()
 
 
-def next_id() -> int:
-    """Highest id currently in the list plus one."""
-    return max((task["id"] for task in tasks), default=0) + 1
-
-
 @app.get(
     "/",
     tags=["meta"],
@@ -255,13 +250,21 @@ def get_task(task_id: int):
     responses={400: BAD_REQUEST},
     tags=["tasks"],
     summary="Create a task",
-    description="Send a title. The server assigns the id and always starts the "
-    "task at done=false - a done sent by the client is ignored.",
+    description="Send a title. SQLite assigns the id and the task always starts "
+    "at done=false - a done sent by the client is ignored.",
 )
 def create_task(payload: dict = Body(..., examples=[{"title": "Buy milk"}])):
-    task = {"id": next_id(), "title": clean_title(payload), "done": False}
-    tasks.append(task)
-    return task
+    # Validate first: a bad title must be a 400 without ever touching the
+    # database, so a rejected request leaves no trace behind.
+    title = clean_title(payload)
+
+    with db_lock, db:
+        cursor = db.execute("INSERT INTO tasks (title, done) VALUES (?, 0)", (title,))
+
+    # lastrowid is the id SQLite just handed out, so there is no need to read
+    # the table back or to compute max(id) + 1 by hand the way the in-memory
+    # version had to.
+    return {"id": cursor.lastrowid, "title": title, "done": False}
 
 
 @app.put(
