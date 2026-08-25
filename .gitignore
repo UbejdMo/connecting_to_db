@@ -2,3 +2,9 @@
 __pycache__/
 *.pyc
 .env
+
+# Local assignment brief - never goes to GitHub
+CLAUDE.md
+
+# The database is generated on first run, not checked in
+tasks.db

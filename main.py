@@ -7,6 +7,10 @@ FastAPI's default 422), and DELETE returns a bare 204.
 Run it with:  uvicorn main:app --reload
 """
 
+import sqlite3
+import threading
+from pathlib import Path
+
 from fastapi import Body, FastAPI, HTTPException, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.utils import get_openapi
@@ -25,7 +29,58 @@ app = FastAPI(
     version="1.0",
 )
 
-# The whole database. It lives in RAM and dies with the process - on purpose.
+# Where the database lives: tasks.db, right next to this file at the repo root.
+# Resolving it from __file__ instead of the current working directory means
+# `uvicorn main:app` finds the same file no matter which folder it is run from.
+DB_PATH = Path(__file__).with_name("tasks.db")
+
+# The rows a brand-new database starts life with, as (title, done) pairs. They
+# are inserted exactly once - on the very first run - and never again.
+SEED_TASKS = [
+    ("Buy milk", 0),
+    ("Read a chapter of the FastAPI docs", 1),
+    ("Walk the dog", 0),
+]
+
+# check_same_thread=False because FastAPI runs sync endpoints in a threadpool,
+# so this connection gets touched by more than one thread. SQLite is fine with
+# that as long as the calls are serialised, which is what db_lock is for.
+db = sqlite3.connect(DB_PATH, check_same_thread=False)
+db.row_factory = sqlite3.Row
+db_lock = threading.Lock()
+
+
+def init_db() -> None:
+    """Create the tasks table if it is missing, then seed it once.
+
+    Both halves are guarded so that restarting the server is harmless:
+    CREATE TABLE IF NOT EXISTS does nothing on run two, and the seed only fires
+    when the table is genuinely empty. That is why the example tasks show up
+    once, ever, instead of three more of them every time the process starts.
+
+    id is a plain INTEGER PRIMARY KEY rather than AUTOINCREMENT on purpose - it
+    aliases SQLite's rowid, so an insert gets max(id) + 1, which is the same id
+    rule Assignment 1 used.
+    """
+    with db_lock, db:
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tasks (
+                id    INTEGER PRIMARY KEY,
+                title TEXT    NOT NULL,
+                done  BOOLEAN NOT NULL DEFAULT 0
+            )
+            """
+        )
+        (count,) = db.execute("SELECT COUNT(*) FROM tasks").fetchone()
+        if count == 0:
+            db.executemany("INSERT INTO tasks (title, done) VALUES (?, ?)", SEED_TASKS)
+
+
+init_db()
+
+# Still the live store that the routes read and write. The endpoints move onto
+# SQL one stage at a time, starting with the reads in stage 1.
 tasks = [
     {"id": 1, "title": "Buy milk", "done": False},
     {"id": 2, "title": "Read a chapter of the FastAPI docs", "done": True},
