@@ -65,9 +65,21 @@ example tasks again. That follows from the rule as specified — "seed only if t
 table is empty" — and it is not the same thing as seeding on every restart: as
 long as a single row survives, the seed never fires again.
 
-## Screenshot
+## Screenshots
 
-_Placeholder — to be replaced with a screenshot of `tasks.db` open in DB Browser
-for SQLite._
+`tasks.db` open in DB Browser for SQLite, one screenshot per read query, taken with
+the table at its seeded three rows — before the `UPDATE` and `DELETE` above.
 
-<!-- ![tasks.db open in DB Browser for SQLite](db-browser.png) -->
+`SELECT * FROM tasks;` — all three rows. Note `done` showing as `0` and `1`: this is
+the raw storage, before the API converts it to `true`/`false`.
+
+![SELECT * FROM tasks in DB Browser for SQLite](db-browser.png)
+
+`SELECT * FROM tasks WHERE done = 1;` — one row, the only finished task.
+
+![SELECT * FROM tasks WHERE done = 1 in DB Browser for SQLite](db-browser2.png)
+
+`SELECT COUNT(*) FROM tasks;` — a single cell rather than a list of rows, because
+`COUNT()` aggregates the whole table down to one number.
+
+![SELECT COUNT(*) FROM tasks in DB Browser for SQLite](db-browser3.png)

@@ -175,9 +175,14 @@ what `UPDATE` and `DELETE` without a `WHERE` clause do, is written up in
 
 ### Database viewer screenshot
 
-_Placeholder — a screenshot of `tasks.db` open in DB Browser for SQLite goes here._
+`tasks.db` open in DB Browser for SQLite, running `SELECT * FROM tasks;` against the
+three seeded rows. `done` shows as `0` and `1` here — that is the real storage, and
+converting it back to `true`/`false` is exactly what `row_to_task` exists to do.
 
-<!-- ![tasks.db open in DB Browser for SQLite](docs/db-browser.png) -->
+![SELECT * FROM tasks in DB Browser for SQLite](docs/db-browser.png)
+
+Screenshots of the other two queries, and the full write-up, are in
+[`docs/sql-exploration.md`](docs/sql-exploration.md).
 
 ## Interactive docs
 
