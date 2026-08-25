@@ -1,6 +1,6 @@
 """Task API - Week 2 assignment.
 
-A tiny CRUD API over an in-memory list, documented at /docs.
+A tiny CRUD API over a SQLite database, documented at /docs.
 Every error answers {"error": "..."}, validation failures are 400 (never
 FastAPI's default 422), and DELETE returns a bare 204.
 
@@ -20,9 +20,10 @@ from pydantic import BaseModel
 app = FastAPI(
     title="Task API",
     description=(
-        "A minimal task tracker built for Week 2.\n\n"
-        "Tasks live in a plain Python list in memory, so **everything is lost "
-        "when the server restarts** - that is intentional, not a bug.\n\n"
+        "A minimal task tracker, now backed by SQLite.\n\n"
+        "Tasks live in a tasks.db file next to the app, so **the data is still "
+        "there after a restart**. The file is created, and seeded with three "
+        "example tasks, the first time the server runs.\n\n"
         "Errors always come back as a JSON object with a single *error* key, "
         "and invalid input is 400, never 422."
     ),
@@ -78,14 +79,6 @@ def init_db() -> None:
 
 
 init_db()
-
-# Still the live store that the routes read and write. The endpoints move onto
-# SQL one stage at a time, starting with the reads in stage 1.
-tasks = [
-    {"id": 1, "title": "Buy milk", "done": False},
-    {"id": 2, "title": "Read a chapter of the FastAPI docs", "done": True},
-    {"id": 3, "title": "Walk the dog", "done": False},
-]
 
 TITLE_ERROR = "title is required and must be a non-empty string"
 DONE_ERROR = "done must be true or false"
@@ -168,18 +161,6 @@ def select_task(task_id: int) -> dict | None:
             "SELECT id, title, done FROM tasks WHERE id = ?", (task_id,)
         ).fetchone()
     return row_to_task(row) if row else None
-
-
-def find_task(task_id: int):
-    """Return the in-memory task dict with this id, or None.
-
-    Only the writes still use this. They move onto SQL in stages 2 and 3, and
-    this function and the list behind it disappear with them.
-    """
-    for task in tasks:
-        if task["id"] == task_id:
-            return task
-    return None
 
 
 def clean_title(payload: dict) -> str:
@@ -280,8 +261,7 @@ def update_task(
     task_id: int,
     payload: dict = Body(..., examples=[{"title": "Buy oat milk", "done": True}]),
 ):
-    task = find_task(task_id)
-    if task is None:
+    if select_task(task_id) is None:
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
 
     # Both fields are optional, but an empty body means the client asked for
@@ -289,14 +269,33 @@ def update_task(
     if "title" not in payload and "done" not in payload:
         raise HTTPException(status_code=400, detail=EMPTY_UPDATE_ERROR)
 
+    # Collect only the columns the client actually sent. Everything is checked
+    # before a single row is touched, so a request that is going to be a 400
+    # never half-applies itself.
+    updates: dict[str, object] = {}
     if "title" in payload:
-        task["title"] = clean_title(payload)
+        updates["title"] = clean_title(payload)
     if "done" in payload:
         if not isinstance(payload["done"], bool):
             raise HTTPException(status_code=400, detail=DONE_ERROR)
-        task["done"] = payload["done"]
+        # SQLite has no boolean type, so True/False is stored as 1/0.
+        updates["done"] = int(payload["done"])
 
-    return task
+    # The column names are interpolated into the SQL, the values are not. That
+    # is safe because the names can only ever be the literals "title" and
+    # "done" - nothing the client sends reaches the SQL text. Leaving the
+    # untouched column out of SET is what makes an omitted field keep its
+    # stored value instead of being overwritten.
+    assignments = ", ".join(f"{column} = ?" for column in updates)
+    with db_lock, db:
+        db.execute(
+            f"UPDATE tasks SET {assignments} WHERE id = ?",
+            (*updates.values(), task_id),
+        )
+
+    # Read the row back instead of echoing the request, so the response is
+    # what the database actually holds.
+    return select_task(task_id)
 
 
 @app.delete(
@@ -309,11 +308,14 @@ def update_task(
     description="Removes the task and returns 204 with no body at all.",
 )
 def delete_task(task_id: int):
-    task = find_task(task_id)
-    if task is None:
+    with db_lock, db:
+        cursor = db.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+
+    # rowcount is 0 when the WHERE matched nothing, which is exactly the 404
+    # case - so one statement does the lookup and the delete together.
+    if cursor.rowcount == 0:
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
 
-    tasks.remove(task)
     # 204 means "done, and there is deliberately nothing to send back".
     # Returning a dict here would make FastAPI write a body that contradicts
     # the status line, so hand back a bodyless Response instead.
